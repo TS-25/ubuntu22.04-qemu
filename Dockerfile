@@ -20,17 +20,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create required directories
 RUN mkdir -p /data /novnc /opt/qemu /cloud-init
 
-# Download Ubuntu cloud image
+# Download Ubuntu 22.04 cloud image
 RUN curl -L https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img \
     -o /opt/qemu/ubuntu.img
 
-# Write meta-data and user-data
-RUN echo "instance-id: ubuntu-vm\nlocal-hostname: ubuntu-vm" > /cloud-init/meta-data && \
-    printf "#cloud-config\n\
+# Write meta-data
+RUN echo "instance-id: ubuntu-vm\nlocal-hostname: ubuntu-vm" > /cloud-init/meta-data
+
+# Write user-data with working root login and password 'root'
+RUN printf "#cloud-config\n\
 preserve_hostname: false\n\
 hostname: ubuntu-vm\n\
 users:\n\
   - name: root\n\
+    gecos: root\n\
     shell: /bin/bash\n\
     lock_passwd: false\n\
     passwd: \$6\$abcd1234\$W6wzBuvyE.D1mBGAgQw2uvUO/honRrnAGjFhMXSk0LUbZosYtoHy1tUtYhKlALqIldOGPrYnhSrOfAknpm91i0\n\
@@ -55,7 +58,7 @@ RUN curl -L https://github.com/novnc/noVNC/archive/refs/tags/v1.3.0.zip -o /tmp/
     mv /tmp/noVNC-1.3.0/* /novnc && \
     rm -rf /tmp/novnc.zip /tmp/noVNC-1.3.0
 
-# Start script (NO KVM)
+# Start script
 RUN cat <<'EOF' > /start.sh
 #!/bin/bash
 set -e
@@ -64,25 +67,24 @@ DISK="/data/vm.raw"
 IMG="/opt/qemu/ubuntu.img"
 SEED="/opt/qemu/seed.iso"
 
+# Create disk if it doesn't exist
 if [ ! -f "$DISK" ]; then
     echo "Creating VM disk..."
     qemu-img convert -f qcow2 -O raw "$IMG" "$DISK"
-    qemu-img resize "$DISK" 20G
+    qemu-img resize "$DISK" 50G
 fi
 
-# Start VM without KVM
+# Start VM (no KVM, no nographic)
 qemu-system-x86_64 \
     -cpu max \
-    -smp 1 \
+    -smp 2 \
     -m 2048 \
     -drive file="$DISK",format=raw,if=virtio \
     -drive file="$SEED",format=raw,if=virtio \
     -netdev user,id=net0,hostfwd=tcp::2222-:22 \
     -device virtio-net,netdev=net0 \
-    -vga std \
+    -vga virtio \
     -display vnc=:0 \
-    -no-reboot \
-    -nographic \
     -daemonize
 
 # Start noVNC
@@ -94,6 +96,7 @@ echo " 🔐 SSH: ssh root@localhost -p 2222"
 echo " 🧾 Login: root / root"
 echo "================================================"
 
+# Wait for SSH port to be ready
 for i in {1..30}; do
   nc -z localhost 2222 && echo "✅ VM is ready!" && break
   echo "⏳ Waiting for SSH..."
